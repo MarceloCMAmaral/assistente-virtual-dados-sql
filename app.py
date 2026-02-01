@@ -145,7 +145,7 @@ def render_chat_history():
                 # Show data visualization
                 if "query_result" in message and message["query_result"]:
                     with st.expander("Ver dados", expanded=True):
-                        display_data(message["query_result"])
+                        display_data(message["query_result"], query=message.get("query"))
 
 
 def process_question(question: str):
@@ -193,7 +193,7 @@ def process_question(question: str):
         # Show data visualization if available
         if result.get("query_result"):
             with st.expander("Ver dados", expanded=True):
-                display_data(result["query_result"])
+                display_data(result["query_result"], query=result.get("query"))
         
         # Save to history
         st.session_state.messages.append({
