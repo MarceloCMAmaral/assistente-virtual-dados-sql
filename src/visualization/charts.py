@@ -59,18 +59,22 @@ def detect_visualization_type(df: pd.DataFrame) -> str:
     return "table"
 
 
-def parse_query_result(result: str) -> pd.DataFrame:
+def parse_query_result(result: str, query: str = None) -> pd.DataFrame:
     """
     Parse query result string into a DataFrame.
     
     Args:
         result: Query result as string (SQLite format).
+        query: Optional SQL query to extract column names from.
         
     Returns:
-        pd.DataFrame: Parsed data.
+        pd.DataFrame: Parsed data with proper column names.
     """
     if not result or result.strip() == "":
         return pd.DataFrame()
+    
+    # Try to extract column names from query
+    column_names = _extract_column_names_from_query(query) if query else None
     
     # SQLite returns results in a specific format
     # Try to parse as a list of tuples representation
@@ -81,9 +85,16 @@ def parse_query_result(result: str) -> pd.DataFrame:
             data = ast.literal_eval(result)
             if isinstance(data, list) and len(data) > 0:
                 if isinstance(data[0], tuple):
-                    return pd.DataFrame(data)
+                    df = pd.DataFrame(data)
+                    # Apply column names if available
+                    if column_names and len(column_names) == len(df.columns):
+                        df.columns = column_names
+                    else:
+                        # Generate meaningful default names
+                        df.columns = _generate_column_names(df)
+                    return df
                 else:
-                    return pd.DataFrame({"resultado": data})
+                    return pd.DataFrame({"Resultado": data})
     except:
         pass
     
@@ -97,22 +108,109 @@ def parse_query_result(result: str) -> pd.DataFrame:
     # Return as single column if nothing works
     try:
         lines = result.strip().split('\n')
-        return pd.DataFrame({"resultado": lines})
+        return pd.DataFrame({"Resultado": lines})
     except:
         return pd.DataFrame()
 
 
-def display_data(result: str | pd.DataFrame, force_type: str = None) -> None:
+def _extract_column_names_from_query(query: str) -> list[str] | None:
+    """
+    Try to extract column names from a SQL SELECT query.
+    
+    Args:
+        query: SQL query string.
+        
+    Returns:
+        List of column names or None if extraction fails.
+    """
+    if not query:
+        return None
+    
+    try:
+        query_upper = query.upper()
+        
+        # Find SELECT ... FROM
+        select_idx = query_upper.find("SELECT")
+        from_idx = query_upper.find("FROM")
+        
+        if select_idx == -1 or from_idx == -1:
+            return None
+        
+        select_clause = query[select_idx + 6:from_idx].strip()
+        
+        # Handle SELECT *
+        if select_clause.strip() == "*":
+            return None
+        
+        # Split by comma and extract column names/aliases
+        columns = []
+        for part in select_clause.split(","):
+            part = part.strip()
+            
+            # Handle AS aliases
+            if " AS " in part.upper():
+                alias_idx = part.upper().find(" AS ")
+                alias = part[alias_idx + 4:].strip().strip('"').strip("'")
+                columns.append(alias)
+            elif " as " in part:
+                alias_idx = part.find(" as ")
+                alias = part[alias_idx + 4:].strip().strip('"').strip("'")
+                columns.append(alias)
+            else:
+                # Use the column name or function result
+                # Handle functions like COUNT(*), SUM(valor)
+                if "(" in part:
+                    # Extract function name for display
+                    func_name = part.split("(")[0].strip()
+                    columns.append(func_name.capitalize())
+                else:
+                    # Clean up column name
+                    col_name = part.split(".")[-1].strip()  # Handle table.column
+                    columns.append(col_name)
+        
+        return columns if columns else None
+    except:
+        return None
+
+
+def _generate_column_names(df: pd.DataFrame) -> list[str]:
+    """
+    Generate meaningful column names based on data types.
+    
+    Args:
+        df: DataFrame with numeric column indices.
+        
+    Returns:
+        List of column names.
+    """
+    names = []
+    for i, col in enumerate(df.columns):
+        # Check data type of column
+        if df[col].dtype in ['int64', 'float64']:
+            # Check if it looks like a count or value
+            if df[col].max() > 1000:
+                names.append(f"Valor_{i+1}" if i > 0 else "Valor")
+            else:
+                names.append(f"Quantidade_{i+1}" if i > 0 else "Quantidade")
+        else:
+            # String column - likely a category/dimension
+            names.append(f"Categoria_{i+1}" if i > 0 else "Categoria")
+    
+    return names
+
+
+def display_data(result: str | pd.DataFrame, query: str = None, force_type: str = None) -> None:
     """
     Display data with appropriate visualization.
     
     Args:
         result: Query result (string or DataFrame).
+        query: SQL query used to generate result (for column naming).
         force_type: Force a specific visualization type.
     """
     # Convert to DataFrame if needed
     if isinstance(result, str):
-        df = parse_query_result(result)
+        df = parse_query_result(result, query)
     else:
         df = result
     
