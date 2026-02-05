@@ -115,9 +115,10 @@ flowchart LR
 
 1. Clone o repositório:
    git clone https://github.com/MarceloCMAmaral/assistente-virtual-dados-sql.git
+   
    cd assistente-virtual-dados
 
-2. Crie um ambiente virtual:
+3. Crie um ambiente virtual:
    # Windows
    python -m venv venv
    venv\Scripts\activate
@@ -126,16 +127,16 @@ flowchart LR
    python -m venv venv
    source venv/bin/activate
 
-3. Instale as dependências:
+4. Instale as dependências:
    pip install -r requirements.txt
 
-4. Configure as variáveis de ambiente:
+5. Configure as variáveis de ambiente:
    Copie o exemplo:
    cp .env.example .env
    
    Edite o arquivo .env e insira sua chave (OPENAI_API_KEY ou GOOGLE_API_KEY) e escolha o provider (openai ou gemini).
 
-5. Execute a aplicação:
+6. Execute a aplicação:
    streamlit run app.py
 
 A aplicação estará disponível em http://localhost:8501
