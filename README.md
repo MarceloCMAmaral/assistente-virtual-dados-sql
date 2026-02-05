@@ -114,7 +114,7 @@ flowchart LR
 ### Instalação
 
 1. Clone o repositório:
-   git clone https://github.com/seu-usuario/assistente-virtual-dados.git
+   git clone https://github.com/MarceloCMAmaral/assistente-virtual-dados-sql.git
    cd assistente-virtual-dados
 
 2. Crie um ambiente virtual:
