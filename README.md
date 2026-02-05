@@ -1,209 +1,180 @@
-# Assistente Virtual de Dados
+# Assistente Virtual de Dados (NL2SQL)
 
-Um chatbot inteligente que responde perguntas em linguagem natural consultando um banco de dados SQLite, utilizando LangGraph para orquestração de agentes.
-
-## Sumario
-
-- [Instrucoes de Execucao](#instrucoes-de-execucao)
-- [Arquitetura](#arquitetura)
-- [Fluxo do Agente](#fluxo-do-agente)
-- [Exemplos de Consultas](#exemplos-de-consultas)
-- [Sugestoes de Melhorias](#sugestoes-de-melhorias)
+> Solução para o Desafio Técnico 1: Engenharia de IA
+> Agente autônomo de análise de dados com capacidade de auto-correção, otimização de contexto e visualização dinâmica.
 
 ---
 
-## Instrucoes de Execucao
+## 🎯 Visão Geral
 
-### Pre-requisitos
+Este projeto implementa um **Assistente de Dados Inteligente** que converte perguntas em linguagem natural (Português) em consultas SQL, executa-as em um banco de dados e apresenta os resultados com visualizações gráficas interativas.
 
-- Python 3.11 ou superior
-- Chave de API do OpenAI ou Google Gemini
+Diferente de abordagens simples (RAG padrão ou Chains lineares), esta solução utiliza uma **Arquitetura de Agentes Cíclica (LangGraph)**. Isso permite que o sistema identifique erros de SQL e se auto-corrija antes de responder ao usuário, além de otimizar o uso de tokens filtrando o contexto do banco de dados.
 
-### Instalacao
+### ✨ Funcionalidades Principais
 
-1. Clone o repositorio:
-```bash
-git clone https://github.com/seu-usuario/assistente-virtual-dados.git
-cd assistente-virtual-dados
-```
-
-2. Crie um ambiente virtual (recomendado):
-```bash
-python -m venv venv
-venv\Scripts\activate  # Windows
-source venv/bin/activate  # Linux/Mac
-```
-
-3. Instale as dependencias:
-```bash
-pip install -r requirements.txt
-```
-
-4. Configure as variaveis de ambiente:
-```bash
-cp .env.example .env
-```
-
-Edite o arquivo `.env` e adicione sua chave de API:
-```
-LLM_PROVIDER=gemini
-GOOGLE_API_KEY=sua_chave_aqui
-```
-
-Ou para usar OpenAI:
-```
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sua_chave_aqui
-```
-
-5. Execute a aplicacao:
-```bash
-python -m streamlit run app.py
-```
-
-A aplicacao estara disponivel em `http://localhost:8501`
+* **🗣️ Natural Language to SQL (NL2SQL):** Converte perguntas complexas em SQL preciso.
+* **🔄 Auto-Correção de Erros:** Se a query falhar (ex: erro de sintaxe), o agente lê o erro, ajusta a query e tenta novamente (loop de feedback).
+* **📉 Otimização de Contexto (Granularidade):** O agente seleciona apenas as tabelas relevantes para a pergunta antes de carregar o schema, economizando tokens em bancos grandes.
+* **🧠 Transparência (White-box):** Exibe o "raciocínio" do modelo, a query gerada e as tabelas selecionadas via UI.
+* **📊 Visualização Inteligente:** Detecta automaticamente o tipo de dado e plota o gráfico mais adequado (Linhas, Barras, Pizza) usando Plotly, evitando erros comuns de plotagem.
 
 ---
 
-## Arquitetura
+## 🏗️ Arquitetura
 
-### Visao Geral
+O sistema é composto por três camadas principais orquestradas pelo LangGraph:
 
-O sistema e composto por tres camadas principais:
+### Fluxo do Agente (StateGraph)
 
+O agente opera como uma Máquina de Estados Finitos com loops de correção:
+
+```mermaid
+graph LR
+    Start([Início]) --> List[🕵️ Listar Tabelas]
+    List --> Filter{Precisa Filtrar?}
+    
+    Filter -- Sim --> FilterAction[🔍 Filtrar Tabelas Relevantes]
+    Filter -- Não --> Schema
+    FilterAction --> Schema[📝 Carregar Schema]
+    
+    Schema --> Generate[🧠 Gerar SQL]
+    Generate --> Execute[⚡ Executar SQL]
+    
+    Execute -- Erro --> Correct[🔧 Corrigir Query]
+    Correct -- Tenta Novamente --> Execute
+    
+    Execute -- Sucesso --> Response[🗣️ Formular Resposta]
+    Response --> End([Fim])
+    
+    %% Estilização
+    style Start fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#000
+    style End fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#000
+    
+    style List fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    style Schema fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    style Generate fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    style FilterAction fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    style Response fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    
+    style Filter fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#000
+    style Execute fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#000
+    
+    style Correct fill:#FFCDD2,stroke:#C62828,stroke-width:2px,stroke-dasharray: 5 5,color:#000
 ```
-+------------------------------------------------------------------+
-|                      STREAMLIT FRONTEND                           |
-|  [Chat Input] [Raciocinio] [Tabela] [Graficos] [LLM Selector]    |
-+--------------------------------+---------------------------------+
-                                 |
-                                 v
-+------------------------------------------------------------------+
-|                     LANGGRAPH SQL AGENT                           |
-|                                                                   |
-|  +----------+   +----------+   +----------+   +----------+       |
-|  | 1.List   |-->| 2.Schema |-->| 3.Query  |-->| 4.Execute|       |
-|  |  Tables  |   |          |   |  Gen     |   |          |       |
-|  +----------+   +----------+   +----------+   +----+-----+       |
-|                                                    |              |
-|                                        +-----------+----------+   |
-|  +----------+                          | 5.Error Handler      |   |
-|  |6.Response|<-------------------------+    (retry loop)      |   |
-|  |  Format  |                          +----------------------+   |
-|  +----------+                                                     |
-+--------------------------------+---------------------------------+
-                                 |
-                                 v
-+------------------------------------------------------------------+
-|                         SQLITE DATABASE                           |
-|  [clientes] [compras] [suporte] [campanhas_marketing]            |
-+------------------------------------------------------------------+
-```
 
-### Estrutura de Arquivos
+### Diagrama de Arquitetura
 
+```mermaid
+flowchart LR
+    A["Frontend (Streamlit)"] --> B{"Agente SQL (LangGraph)"}
+    B --> C["Nó: Listar Tabelas"]
+    C --> D["Nó: Filtrar Tabelas (LLM)"]
+    D --> E["Nó: Obter Schema"]
+    E --> F["Nó: Gerar Query (LLM)"]
+    F --> G{"Executar Query (SQLite)"}
+    G -- "Sucesso" --> H["Nó: Formular Resposta (LLM)"]
+    G -- "Erro" --> I["Nó: Corrigir Query (LLM)"]
+    I --> G
+    H --> J["Visualização (Plotly)"]
+    H --> K["Resposta em Texto"]
+    J --> A
+    K --> A
+    
+    subgraph Banco de Dados
+        L[("SQLite (.db)")]
+    end
+    C -.-> L
+    E -.-> L
+    G -.-> L
+
+    style A fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    style B fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    style L fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px,color:#000
+    
+    style C fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    style D fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    style E fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    style F fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    style H fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    style J fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    style K fill:#FFFFFF,stroke:#333,stroke-width:1px,color:#000
+    
+    style G fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#000
+    style I fill:#FFCDD2,stroke:#C62828,stroke-width:2px,color:#000
 ```
+---
+
+## 🚀 Como Executar
+
+### Pré-requisitos
+- Python 3.10 ou superior
+- Chave de API (OpenAI ou Google Gemini)
+
+### Instalação
+
+1. Clone o repositório:
+   git clone https://github.com/seu-usuario/assistente-virtual-dados.git
+   cd assistente-virtual-dados
+
+2. Crie um ambiente virtual:
+   # Windows
+   python -m venv venv
+   venv\Scripts\activate
+   
+   # Linux/Mac
+   python -m venv venv
+   source venv/bin/activate
+
+3. Instale as dependências:
+   pip install -r requirements.txt
+
+4. Configure as variáveis de ambiente:
+   Copie o exemplo:
+   cp .env.example .env
+   
+   Edite o arquivo .env e insira sua chave (OPENAI_API_KEY ou GOOGLE_API_KEY) e escolha o provider (openai ou gemini).
+
+5. Execute a aplicação:
+   streamlit run app.py
+
+A aplicação estará disponível em http://localhost:8501
+
+---
+
+## 💡 Diferenciais Técnicos (Por que LangGraph?)
+
+Durante o desenvolvimento, a arquitetura de Agentes (LangGraph) foi escolhida em detrimento de Chains lineares pelos seguintes motivos:
+
+1. **Resiliência (Auto-correção):**
+   LLMs podem alucinar sintaxe SQL. O nó de correção permite que o agente aprenda com o erro de execução e tente novamente, garantindo robustez.
+
+2. **Controle Granular de Contexto (Nó de Filtro):**
+   Em vez de injetar o schema do banco inteiro no prompt (o que é caro e confuso para o LLM em bancos grandes), implementei um nó intermediário que seleciona apenas as tabelas relevantes antes de pedir o schema.
+
+3. **Visualização "Data-Aware":**
+   O módulo de gráficos contém heurísticas para tratar séries temporais corretamente, agrupando dados por categorias e evitando gráficos quebrados.
+
+---
+
+## 📂 Estrutura de Arquivos
+
+```text
 assistente-virtual-dados/
-|-- app.py                    # Aplicacao Streamlit
-|-- requirements.txt          # Dependencias Python
-|-- .env.example              # Template de variaveis de ambiente
-|-- anexo_desafio_1.db        # Banco de dados SQLite
-|
-+-- src/
-    |-- __init__.py
-    |-- config.py             # Configuracoes centralizadas
-    |
-    +-- agent/
-    |   |-- __init__.py
-    |   |-- llm.py            # Factory para OpenAI e Gemini
-    |   |-- prompts.py        # Prompts do sistema
-    |   +-- sql_agent.py      # Agente SQL com LangGraph StateGraph
-    |
-    +-- database/
-    |   |-- __init__.py
-    |   +-- connection.py     # Conexao com SQLite
-    |
-    +-- visualization/
-        |-- __init__.py
-        +-- charts.py         # Visualizacao dinamica com Plotly
-```
-
-### Tecnologias Utilizadas
-
-| Componente | Tecnologia |
-|------------|------------|
-| Linguagem | Python 3.11+ |
-| Framework LLM | LangChain + LangGraph |
-| LLM | OpenAI GPT-4o-mini / Google Gemini 2.5 Flash |
-| Banco de Dados | SQLite |
-| Frontend | Streamlit |
-| Visualizacao | Plotly Express |
-
----
-
-## Fluxo do Agente
-
-O agente SQL utiliza um StateGraph do LangGraph com os seguintes nos:
-
-### 1. List Tables
-Identifica todas as tabelas disponiveis no banco de dados.
-
-### 2. Get Schema
-Carrega o schema (DDL) das tabelas para fornecer contexto ao LLM.
-
-### 3. Generate Query
-O LLM traduz a pergunta em linguagem natural para uma query SQL valida.
-
-### 4. Execute Query
-Executa a query no banco SQLite.
-
-### 5. Error Handler (Condicional)
-Se a query falhar:
-- Analisa o erro
-- Corrige a query usando o LLM
-- Tenta novamente (maximo 3 tentativas)
-
-### 6. Formulate Response
-Converte os resultados da query em uma resposta em linguagem natural.
-
-### Diagrama de Fluxo
-
-```
-Pergunta do Usuario
-        |
-        v
-+---------------+
-| List Tables   |
-+-------+-------+
-        |
-        v
-+---------------+
-| Get Schema    |
-+-------+-------+
-        |
-        v
-+---------------+
-| Generate Query|
-+-------+-------+
-        |
-        v
-+---------------+
-| Execute Query |
-+-------+-------+
-        |
-    Erro? ----Sim----> Tentativas < 3? ----Sim----> Corrigir Query
-        |                    |                            |
-       Nao                  Nao                           |
-        |                    |                            |
-        v                    v                            |
-+------------------+  +------------------+                |
-|Formular Resposta |  |Resposta de Erro  |                |
-+--------+---------+  +--------+---------+                |
-         |                     |                          |
-         +----------+----------+                          |
-                    |                                     |
-                    v                                     |
-            Retornar ao Frontend <------------------------+
+├── app.py                    # Frontend Streamlit
+├── requirements.txt          # Dependências
+├── anexo_desafio_1.db        # Banco de Dados SQLite
+├── .env                      # Variáveis de Ambiente
+└── src/
+    ├── config.py             # Configurações Globais
+    ├── agent/
+    │   ├── sql_agent.py      # Grafo LangGraph (Nodes & Edges)
+    │   ├── prompts.py        # Prompts do Sistema e Filtros
+    │   └── llm.py            # Configuração dos Modelos
+    ├── database/
+    │   └── connection.py     # Gestão da Conexão (Singleton)
+    └── visualization/
+        └── charts.py         # Geração de Gráficos Plotly
 ```
 
 ---
@@ -235,6 +206,22 @@ O sistema detecta automaticamente o melhor tipo de grafico:
 
 ## Sugestoes de Melhorias
 
+### Mais Importates para UX
+
+Mesmo que a versão atual atenda a todos os requisitos funcionais elecandos no desafio, acredito que existem pontos chave para evoluir a robustez do sistema em produção:
+
+1. **Memória Conversacional (contexto)**
+   - Problema: Atualmente o agente trata cada interação de forma isolada.
+   - Solução Proposta: Implementar persistência de estado no SQLAgentState mantendo uma janela deslizante das últimas interações (ex: HumanMessage e AIMessage). Isso permitiria uma conversa, de fato, com o agente. Ex: "Desses clientes listados, quantos são de SP?".
+
+2. **Guardrails de Segurança**
+   - Problema: Dependência exclusiva do prompt do sistema para evitar comandos DML (DELETE, DROP).
+   - Solução Proposta: Adicionar um middleware antes da execução da query. Utilizando uma análise léxica ou regex para bloquear prompts destrutitivos, garantindo que mesmo em caso de "jailbreak" do LLM, o banco permaneça íntegro.
+
+3. **Testes Automatizados**
+   - Problema: Garantia manual de qualidade.
+   - Solução Proposta: Implementar testes unitários com pytest focados nas funções determinísticas (ex: detect_visualization_type em charts.py) e testes de integração para o fluxo do grafo (mockando a chamada ao LLM para testar apenas a lógica de roteamento do LangGraph).
+
 ### Curto Prazo
 
 1. **Cache de Respostas**: Implementar cache para consultas repetidas usando Redis ou SQLite.
@@ -251,9 +238,7 @@ O sistema detecta automaticamente o melhor tipo de grafico:
 
 6. **Multiplos Bancos**: Suportar conexao com PostgreSQL, MySQL alem de SQLite.
 
-7. **Exportacao de Dados**: Permitir download dos resultados em CSV, Excel ou PDF.
-
-8. **Modo Socratico**: Adicionar modo onde o assistente faz perguntas clarificadoras antes de executar queries complexas.
+7. **Modo Socratico**: Adicionar modo onde o assistente faz perguntas clarificadoras antes de executar queries complexas.
 
 ### Longo Prazo
 
@@ -261,9 +246,7 @@ O sistema detecta automaticamente o melhor tipo de grafico:
 
 10. **Dashboards Automaticos**: Gerar dashboards automaticos baseados em perguntas frequentes.
 
-11. **Suporte a Voz**: Adicionar entrada por voz e leitura de respostas.
-
-12. **Multi-tenant**: Suportar multiplos usuarios com bancos de dados isolados.
+11. **Multi-tenant**: Suportar multiplos usuarios com bancos de dados isolados.
 
 ---
 

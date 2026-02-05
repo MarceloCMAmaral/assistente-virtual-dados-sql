@@ -3,6 +3,7 @@ Dynamic visualization module using Plotly.
 """
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from io import StringIO
 
@@ -115,63 +116,81 @@ def parse_query_result(result: str, query: str = None) -> pd.DataFrame:
 
 def _extract_column_names_from_query(query: str) -> list[str] | None:
     """
-    Try to extract column names from a SQL SELECT query.
-    
-    Args:
-        query: SQL query string.
-        
-    Returns:
-        List of column names or None if extraction fails.
+    Extrai nomes de colunas de uma query SQL SELECT de forma robusta.
+    Corrige o problema de misturar colunas com e sem alias (AS).
     """
     if not query:
         return None
     
+    import re
+    
     try:
-        query_upper = query.upper()
+        # Find SELECT ... FROM clause
+        # Use re.DOTALL to get multiline and IGNORECASE
+        match = re.search(r'SELECT\s+(.+?)\s+FROM', query, re.IGNORECASE | re.DOTALL)
         
-        # Find SELECT ... FROM
-        select_idx = query_upper.find("SELECT")
-        from_idx = query_upper.find("FROM")
-        
-        if select_idx == -1 or from_idx == -1:
+        if not match:
             return None
         
-        select_clause = query[select_idx + 6:from_idx].strip()
+        select_clause = match.group(1).strip()
         
-        # Handle SELECT *
-        if select_clause.strip() == "*":
+        # If it's SELECT *, we can't know the names
+        if select_clause == "*":
             return None
+            
+        # Step 1: Split columns by comma, respecting parentheses (functions)
+        depth = 0
+        column_parts = []
+        current_part = ""
         
-        # Split by comma and extract column names/aliases
+        for char in select_clause:
+            if char == '(':
+                depth += 1
+                current_part += char
+            elif char == ')':
+                depth -= 1
+                current_part += char
+            elif char == ',' and depth == 0:
+                column_parts.append(current_part.strip())
+                current_part = ""
+            else:
+                current_part += char
+        
+        if current_part.strip():
+            column_parts.append(current_part.strip())
+            
+        # Passo 2: Process each part to extract the final name
         columns = []
-        for part in select_clause.split(","):
+        for part in column_parts:
             part = part.strip()
             
-            # Handle AS aliases
-            if " AS " in part.upper():
-                alias_idx = part.upper().find(" AS ")
-                alias = part[alias_idx + 4:].strip().strip('"').strip("'")
-                columns.append(alias)
-            elif " as " in part:
-                alias_idx = part.find(" as ")
-                alias = part[alias_idx + 4:].strip().strip('"').strip("'")
-                columns.append(alias)
+            # Try to find "AS alias_name" (at the end of the string)
+            # The regex takes the last token of the string that is preceded by AS
+            as_match = re.search(r'\bAS\s+([a-zA-Z0-9_]+)["\']?$', part, re.IGNORECASE)
+            
+            if as_match:
+                # Case: COUNT(...) AS total
+                columns.append(as_match.group(1))
             else:
-                # Use the column name or function result
-                # Handle functions like COUNT(*), SUM(valor)
-                if "(" in part:
-                    # Extract function name for display
-                    func_name = part.split("(")[0].strip()
-                    columns.append(func_name.capitalize())
+                # Case: s.canal (without AS)
+                # Takes what is after the last dot, if any
+                # Removes functions if any (ex: DATE(data) -> data) - simplified
+                clean_part = part.split('(')[0].strip() # Takes before the parentheses if it's a function without alias
+                
+                if '.' in part and '(' not in part:
+                    # Ex: s.canal -> canal
+                    columns.append(part.split('.')[-1])
+                elif ' ' in part.strip():
+                    # Fallback: if there's a space and no AS, take the last word
+                    # Ex: "table column" (implicit alias without AS)
+                    columns.append(part.split()[-1])
                 else:
-                    # Clean up column name
-                    col_name = part.split(".")[-1].strip()  # Handle table.column
-                    columns.append(col_name)
-        
-        return columns if columns else None
-    except:
+                    columns.append(part)
+                    
+        return columns
+    except Exception as e:
+        # In production, logging the error would be ideal
         return None
-
 
 def _generate_column_names(df: pd.DataFrame) -> list[str]:
     """
@@ -251,6 +270,19 @@ def display_data(result: str | pd.DataFrame, query: str = None, force_type: str 
         st.dataframe(df, use_container_width=True)
 
 
+
+def _get_column_types(df: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Separates columns into numerical and categorical."""
+    num_cols = df.select_dtypes(include=['number']).columns.tolist()
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+    return num_cols, cat_cols
+
+
+def _format_column_label(col_name: str) -> str:
+    """Formats column name for better display."""
+    return col_name.replace("_", " ").title()
+
+
 def _render_bar_chart(df: pd.DataFrame) -> None:
     """Render a bar chart."""
     cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
@@ -275,35 +307,80 @@ def _render_bar_chart(df: pd.DataFrame) -> None:
 
 
 def _render_line_chart(df: pd.DataFrame) -> None:
-    """Render a line chart for time series."""
-    cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-    num_cols = df.select_dtypes(include=['number']).columns.tolist()
+    """Render a line chart with support for multiple series and grouping."""
+    num_cols, cat_cols = _get_column_types(df)
     
-    # Find date column
+    # 1. Try to identify the date column
     date_col = None
     for col in cat_cols:
         try:
-            df[col] = pd.to_datetime(df[col])
+            pd.to_datetime(df[col])
             date_col = col
             break
         except:
             pass
     
-    if date_col is None or not num_cols:
+    # If no date column is found, use the first categorical column as X
+    if date_col is None:
+        if cat_cols:
+            date_col = cat_cols[0]
+        else:
+            st.dataframe(df, use_container_width=True)
+            return
+    
+    if not num_cols:
         st.dataframe(df, use_container_width=True)
         return
-    
-    y_col = num_cols[0]
-    
-    fig = px.line(
-        df, 
-        x=date_col, 
-        y=y_col,
-        title=f"Tendencia de {y_col}",
-        markers=True,
-    )
-    st.plotly_chart(fig, use_container_width=True)
 
+    # 2. Identify if there is a column to group the lines (e.g., Channel)
+    # Remove the column used on the X axis from the list of categorical columns available
+    group_cols = [c for c in cat_cols if c != date_col]
+    color_col = group_cols[0] if group_cols else None
+    
+    # Plotting logic
+    if len(num_cols) >= 2:
+        # Case A: Multiple numeric columns (e.g., Sales and Profit over time)
+        fig = go.Figure()
+        colors = px.colors.qualitative.Set2
+        
+        for i, num_col in enumerate(num_cols):
+            fig.add_trace(go.Scatter(
+                x=df[date_col],
+                y=df[num_col],
+                name=_format_column_label(num_col),
+                mode='lines+markers',
+                line=dict(color=colors[i % len(colors)], width=2),
+                marker=dict(size=8),
+            ))
+            
+        title = f"Tendencia ao longo de {_format_column_label(date_col)}"
+        
+    else:
+        # Case B: A single numeric column, possibly grouped by category (e.g., Quantity by Month, divided by Channel)
+        y_col = num_cols[0]
+        
+        fig = px.line(
+            df, 
+            x=date_col, 
+            y=y_col,
+            color=color_col,
+            title=f"Tendencia de {_format_column_label(y_col)}" + (f" por {_format_column_label(color_col)}" if color_col else ""),
+            markers=True,
+            labels={
+                date_col: _format_column_label(date_col),
+                y_col: _format_column_label(y_col),
+                **( {color_col: _format_column_label(color_col)} if color_col else {} )
+            },
+        )
+
+    fig.update_layout(
+        xaxis_title=_format_column_label(date_col),
+        yaxis_title="Valor",
+        showlegend=True,
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 def _render_scatter_chart(df: pd.DataFrame) -> None:
     """Render a scatter plot."""

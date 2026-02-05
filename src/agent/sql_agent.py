@@ -48,6 +48,42 @@ def list_tables(state: SQLAgentState) -> dict:
         "steps": [step],
     }
 
+def filter_tables(state: SQLAgentState) -> dict:
+    """Node: Filter tables based on relevance to the question."""
+    llm = get_llm(state.get("llm_provider"))
+    question = state["question"]
+    all_tables = state["tables"]
+    
+    # If there are few tables (e.g., < 2), don't waste tokens on filtering
+    if len(all_tables) <= 2:
+        return {"tables": all_tables}
+
+    from src.agent.prompts import TABLE_SELECTION_PROMPT
+    
+    prompt = TABLE_SELECTION_PROMPT.format(
+        question=question,
+        table_list=", ".join(all_tables)
+    )
+    
+    response = llm.invoke(prompt)
+    selected_tables_str = response.content.strip()
+    
+    # Parse the response string into a list
+    selected_tables = [t.strip() for t in selected_tables_str.split(',')]
+    
+    # Simple validation to ensure tables exist
+    valid_tables = [t for t in selected_tables if t in all_tables]
+    
+    # Fallback: If the LLM hallucinates and doesn't return anything valid, use all
+    if not valid_tables:
+        valid_tables = all_tables
+        
+    step = f"🕵️ **Tabelas selecionadas:** {', '.join(valid_tables)}"
+    
+    return {
+        "tables": valid_tables, # Updates state with only the relevant tables
+        "steps": [step]
+    }
 
 def get_schema(state: SQLAgentState) -> dict:
     """Node: Get schema for all tables."""
@@ -187,6 +223,7 @@ def build_sql_agent() -> StateGraph:
     
     # Add nodes
     workflow.add_node("list_tables", list_tables)
+    workflow.add_node("filter_tables", filter_tables)
     workflow.add_node("get_schema", get_schema)
     workflow.add_node("generate_query", generate_query)
     workflow.add_node("execute_query", execute_query)
@@ -197,7 +234,8 @@ def build_sql_agent() -> StateGraph:
     workflow.set_entry_point("list_tables")
     
     # Add edges
-    workflow.add_edge("list_tables", "get_schema")
+    workflow.add_edge("list_tables", "filter_tables")
+    workflow.add_edge("filter_tables", "get_schema")
     workflow.add_edge("get_schema", "generate_query")
     workflow.add_edge("generate_query", "execute_query")
     workflow.add_conditional_edges(
